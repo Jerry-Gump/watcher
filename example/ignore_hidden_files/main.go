@@ -1,3 +1,11 @@
+/*
+ * @Date: 2023-03-22 12:39:02
+ * @LastEditors: Jerry Gump gongzengli@qq.com
+ * @LastEditTime: 2023-03-22 13:35:06
+ * @FilePath: e:\VSCode-Project\legalsoft.com.cn\watcher\example\ignore_hidden_files\main.go
+ * @Description: 
+ * Copyright (c) 2023 by ${git_name} email: ${git_email}, All Rights Reserved.
+ */
 package main
 
 import (
@@ -5,7 +13,7 @@ import (
 	"log"
 	"time"
 
-	"github.com/radovskyb/watcher"
+	"github.com/Jerry-Gump/watcher"
 )
 
 func main() {
