@@ -17,17 +17,12 @@ type syncMap[T interface{}] struct {
 	sync.Map
 }
 
-func (sm *syncMap[T]) ToArray() []*T {
-	var l []*T
+func (sm *syncMap[T]) ToArray() []T {
+	var l []T
 	sm.Range(func(key, value any) bool {
 		td, ok := value.(T)
 		if ok {
-			l = append(l, &td)
-		} else {
-			td, ok := value.(*T)
-			if ok {
-				l = append(l, td)
-			}
+			l = append(l, td)
 		}
 		return true
 	})
@@ -214,6 +209,9 @@ type Watcher struct {
 	ops          syncMap[struct{}]    // Op filtering.
 	ignoreHidden bool                 // ignore hidden files or not.
 	maxEvents    int                  // max sent events per cycle
+
+	paused      bool          // 暂停，期间忽略所有的事务
+	pausednames syncMap[bool] // 暂停时缓存，在恢复时还给names
 }
 
 // New creates a new Watcher.
@@ -232,6 +230,42 @@ func New() *Watcher {
 		files:   syncMap[os.FileInfo]{},
 		ignored: syncMap[struct{}]{},
 		names:   syncMap[bool]{},
+	}
+}
+
+func (w *Watcher) Pause() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if !w.paused {
+		w.pausednames = syncMap[bool]{}
+		w.names.Range(func(key, value any) bool {
+			name := key.(string)
+			bv := value.(bool)
+			w.pausednames.Store(name, bv)
+			return true
+		})
+		w.files = syncMap[fs.FileInfo]{} // make(map[string]os.FileInfo)
+		w.names = syncMap[bool]{}        // make(map[string]bool)
+		w.paused = true
+	}
+}
+
+func (w *Watcher) Resume() {
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	if w.paused {
+		w.paused = false
+		w.pausednames.Range(func(key, value any) bool {
+			name := key.(string)
+			bv := value.(bool)
+			if bv {
+				w.AddRecursive(name)
+			} else {
+				w.Add(name)
+			}
+			return true
+		})
+		w.pausednames = syncMap[bool]{}
 	}
 }
 
@@ -650,61 +684,62 @@ func (w *Watcher) Start(d time.Duration) error {
 	w.wg.Done()
 
 	for {
-		// done lets the inner polling cycle loop know when the
-		// current cycle's method has finished executing.
-		done := make(chan struct{})
+		if !w.paused {
+			// done lets the inner polling cycle loop know when the
+			// current cycle's method has finished executing.
+			done := make(chan struct{})
 
-		// Any events that are found are first piped to evt before
-		// being sent to the main Event channel.
-		evt := make(chan Event)
+			// Any events that are found are first piped to evt before
+			// being sent to the main Event channel.
+			evt := make(chan Event)
 
-		// Retrieve the file list for all watched file's and dirs.
-		fileList := w.retrieveFileList()
+			// Retrieve the file list for all watched file's and dirs.
+			fileList := w.retrieveFileList()
 
-		// cancel can be used to cancel the current event polling function.
-		cancel := make(chan struct{})
+			// cancel can be used to cancel the current event polling function.
+			cancel := make(chan struct{})
 
-		// Look for events.
-		go func() {
-			w.pollEvents(fileList, evt, cancel)
-			done <- struct{}{}
-		}()
+			// Look for events.
+			go func() {
+				w.pollEvents(fileList, evt, cancel)
+				done <- struct{}{}
+			}()
 
-		// numEvents holds the number of events for the current cycle.
-		numEvents := 0
+			// numEvents holds the number of events for the current cycle.
+			numEvents := 0
 
-	inner:
-		for {
-			select {
-			case <-w.close:
-				close(cancel)
-				close(w.Closed)
-				return nil
-			case event := <-evt:
-				if w.ops.Length() > 0 { // Filter Ops.
-					_, found := w.ops.Get(event.Op)
-					if !found {
-						continue
-					}
-				}
-				numEvents++
-				if w.maxEvents > 0 && numEvents > w.maxEvents {
+		inner:
+			for {
+				select {
+				case <-w.close:
 					close(cancel)
+					close(w.Closed)
+					return nil
+				case event := <-evt:
+					if w.ops.Length() > 0 { // Filter Ops.
+						_, found := w.ops.Get(event.Op)
+						if !found {
+							continue
+						}
+					}
+					numEvents++
+					if w.maxEvents > 0 && numEvents > w.maxEvents {
+						close(cancel)
+						break inner
+					}
+					w.Event <- event
+				case <-done: // Current cycle is finished.
 					break inner
 				}
-				w.Event <- event
-			case <-done: // Current cycle is finished.
-				break inner
 			}
-		}
 
-		// Update the file's list.
-		w.mu.Lock()
-		for k, v := range fileList {
-			w.files.Store(k, v)
+			// Update the file's list.
+			w.mu.Lock()
+			for k, v := range fileList {
+				w.files.Store(k, v)
+			}
+			w.mu.Unlock()
 		}
-		w.mu.Unlock()
-
 		// Sleep and then continue to the next loop iteration.
 		time.Sleep(d)
 	}
