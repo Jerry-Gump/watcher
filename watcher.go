@@ -251,10 +251,7 @@ func (w *Watcher) Pause() {
 }
 
 func (w *Watcher) Resume() {
-	w.mu.Lock()
-	defer w.mu.Unlock()
 	if w.paused {
-		w.paused = false
 		w.pausednames.Range(func(key, value any) bool {
 			name := key.(string)
 			bv := value.(bool)
@@ -265,7 +262,10 @@ func (w *Watcher) Resume() {
 			}
 			return true
 		})
+		w.mu.Lock()
+		w.paused = false
 		w.pausednames = syncMap[bool]{}
+		w.mu.Unlock()
 	}
 }
 
