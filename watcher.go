@@ -8,9 +8,12 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
+
+	log "github.com/sirupsen/logrus"
 )
 
 type syncMap[T interface{}] struct {
@@ -210,7 +213,7 @@ type Watcher struct {
 	ignoreHidden bool                 // ignore hidden files or not.
 	maxEvents    int                  // max sent events per cycle
 
-	paused      bool          // 暂停，期间忽略所有的事务
+	paused      int           // 暂停，期间忽略所有的事务
 	pausednames syncMap[bool] // 暂停时缓存，在恢复时还给names
 }
 
@@ -234,9 +237,11 @@ func New() *Watcher {
 }
 
 func (w *Watcher) Pause() {
+	b := debug.Stack()
+	log.Infoln(string(b))
 	w.mu.Lock()
 	defer w.mu.Unlock()
-	if !w.paused {
+	if w.paused == 0 {
 		w.pausednames = syncMap[bool]{}
 		w.names.Range(func(key, value any) bool {
 			name := key.(string)
@@ -246,26 +251,74 @@ func (w *Watcher) Pause() {
 		})
 		w.files = syncMap[fs.FileInfo]{} // make(map[string]os.FileInfo)
 		w.names = syncMap[bool]{}        // make(map[string]bool)
-		w.paused = true
 	}
+	w.paused++
 }
 
 func (w *Watcher) Resume() {
-	if w.paused {
+	b := debug.Stack()
+	log.Infoln(string(b))
+	w.mu.Lock()
+	defer w.mu.Unlock()
+	w.paused--
+	if w.paused < 0 {
+		w.paused = 0
+	}
+	if w.paused == 0 {
+		var err error
 		w.pausednames.Range(func(key, value any) bool {
 			name := key.(string)
 			bv := value.(bool)
 			if bv {
-				w.AddRecursive(name)
+				name, err = filepath.Abs(name)
+				if err != nil {
+					return true
+				}
+
+				fileList, err := w.listRecursive(name)
+				if err != nil {
+					return true
+				}
+				for k, v := range fileList {
+					w.files.Store(k, v)
+				}
+
+				// Add the name to the names list.
+				w.names.Store(name, true)
 			} else {
-				w.Add(name)
+				name, err = filepath.Abs(name)
+				if err != nil {
+					return true
+				}
+
+				// If name is on the ignored list or if hidden files are
+				// ignored and name is a hidden file or directory, simply return.
+				_, ignored := w.ignored.Get(name)
+
+				isHidden, err := isHiddenFile(name)
+				if err != nil {
+					return true
+				}
+
+				if ignored || (w.ignoreHidden && isHidden) {
+					return true
+				}
+
+				// Add the directory's contents to the files list.
+				fileList, err := w.list(name)
+				if err != nil {
+					return true
+				}
+				for k, v := range fileList {
+					w.files.Store(k, v)
+				}
+
+				// Add the name to the names list.
+				w.names.Store(name, false)
 			}
 			return true
 		})
-		w.mu.Lock()
-		w.paused = false
 		w.pausednames = syncMap[bool]{}
-		w.mu.Unlock()
 	}
 }
 
@@ -684,7 +737,7 @@ func (w *Watcher) Start(d time.Duration) error {
 	w.wg.Done()
 
 	for {
-		if !w.paused {
+		if w.paused == 0 {
 			// done lets the inner polling cycle loop know when the
 			// current cycle's method has finished executing.
 			done := make(chan struct{})
