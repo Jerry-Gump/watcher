@@ -1,14 +1,12 @@
 package watcher
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
-	"runtime/debug"
 	"strings"
 	"sync"
 	"time"
@@ -16,84 +14,84 @@ import (
 	log "github.com/sirupsen/logrus"
 )
 
-type syncMap[T interface{}] struct {
-	sync.Map
-}
+// type syncMap[T interface{}] struct {
+// 	sync.Map
+// }
 
-func (sm *syncMap[T]) ToArray() []T {
-	var l []T
-	sm.Range(func(key, value any) bool {
-		td, ok := value.(T)
-		if ok {
-			l = append(l, td)
-		}
-		return true
-	})
-	return l
-}
+// func (sm *syncMap[T]) ToArray() []T {
+// 	var l []T
+// 	sm.Range(func(key, value any) bool {
+// 		td, ok := value.(T)
+// 		if ok {
+// 			l = append(l, td)
+// 		}
+// 		return true
+// 	})
+// 	return l
+// }
 
-func (sm *syncMap[T]) GetPtr(key any) (*T, bool) {
-	v, ok := sm.Load(key)
-	if ok {
-		value, ok := v.(T)
-		if ok {
-			return &value, true
-		} else {
-			value, ok := v.(*T)
-			if ok {
-				return value, true
-			}
-		}
-	}
-	return nil, false
-}
+// func (sm *syncMap[T]) GetPtr(key any) (*T, bool) {
+// 	v, ok := sm.Load(key)
+// 	if ok {
+// 		value, ok := v.(T)
+// 		if ok {
+// 			return &value, true
+// 		} else {
+// 			value, ok := v.(*T)
+// 			if ok {
+// 				return value, true
+// 			}
+// 		}
+// 	}
+// 	return nil, false
+// }
 
-func (sm *syncMap[T]) Get(key any) (T, bool) {
-	v, ok := sm.Load(key)
-	if ok {
-		value, ok := v.(T)
-		if ok {
-			return value, true
-		} else {
-			value, ok := v.(*T)
-			if ok {
-				return *value, true
-			}
-		}
-	}
-	var t T
-	return t, false
-}
+// func (sm *syncMap[T]) Get(key any) (T, bool) {
+// 	v, ok := sm.Load(key)
+// 	if ok {
+// 		value, ok := v.(T)
+// 		if ok {
+// 			return value, true
+// 		} else {
+// 			value, ok := v.(*T)
+// 			if ok {
+// 				return *value, true
+// 			}
+// 		}
+// 	}
+// 	var t T
+// 	return t, false
+// }
 
-func (sm *syncMap[T]) Length() int {
-	length := 0
-	sm.Range(func(_, _ interface{}) bool {
-		length++
-		return true
-	})
-	return length
-}
+// func (sm *syncMap[T]) Length() int {
+// 	length := 0
+// 	sm.Range(func(_, _ interface{}) bool {
+// 		length++
+// 		return true
+// 	})
+// 	return length
+// }
 
-func (sm *syncMap[T]) UnmarshalJSON(data []byte) error {
-	var tmpMap map[string]T
-	if err := json.Unmarshal(data, &tmpMap); err != nil {
-		return err
-	}
-	for key, value := range tmpMap {
-		sm.Store(key, &value)
-	}
-	return nil
-}
+// func (sm *syncMap[T]) UnmarshalJSON(data []byte) error {
+// 	var tmpMap map[string]T
+// 	if err := json.Unmarshal(data, &tmpMap); err != nil {
+// 		return err
+// 	}
+// 	for key, value := range tmpMap {
+// 		sm.Store(key, &value)
+// 	}
+// 	return nil
+// }
 
-func (sm *syncMap[T]) MarshalJSON() ([]byte, error) {
-	tmpMap := make(map[string]interface{})
-	sm.Range(func(k, v interface{}) bool {
-		key, _ := k.(string)
-		tmpMap[key] = v
-		return true
-	})
-	return json.MarshalIndent(tmpMap, "", "  ")
-}
+// func (sm *syncMap[T]) MarshalJSON() ([]byte, error) {
+// 	tmpMap := make(map[string]interface{})
+// 	sm.Range(func(k, v interface{}) bool {
+// 		key, _ := k.(string)
+// 		tmpMap[key] = v
+// 		return true
+// 	})
+// 	return json.MarshalIndent(tmpMap, "", "  ")
+// }
 
 var (
 	// ErrDurationTooShort occurs when calling the watcher's Start
@@ -206,15 +204,15 @@ type Watcher struct {
 	mu           *sync.Mutex
 	ffh          []FilterFileHookFunc
 	running      bool
-	names        syncMap[bool]        // bool for recursive or not.
-	files        syncMap[os.FileInfo] // map of files.
-	ignored      syncMap[struct{}]    // ignored files or directories.
-	ops          syncMap[struct{}]    // Op filtering.
-	ignoreHidden bool                 // ignore hidden files or not.
-	maxEvents    int                  // max sent events per cycle
+	names        map[string]bool        // bool for recursive or not.
+	files        map[string]os.FileInfo // map of files.
+	ignored      map[string]struct{}    // ignored files or directories.
+	ops          map[Op]struct{}        // Op filtering.
+	ignoreHidden bool                   // ignore hidden files or not.
+	maxEvents    int                    // max sent events per cycle
 
-	paused      int           // 暂停，期间忽略所有的事务
-	pausednames syncMap[bool] // 暂停时缓存，在恢复时还给names
+	paused      int             // 暂停，期间忽略所有的事务
+	pausednames map[string]bool // 暂停时缓存，在恢复时还给names
 }
 
 // New creates a new Watcher.
@@ -228,97 +226,64 @@ func New() *Watcher {
 		Error:   make(chan error),
 		Closed:  make(chan struct{}),
 		close:   make(chan struct{}),
-		mu:      new(sync.Mutex),
+		mu:      &sync.Mutex{},
 		wg:      &wg,
-		files:   syncMap[os.FileInfo]{},
-		ignored: syncMap[struct{}]{},
-		names:   syncMap[bool]{},
+		files:   make(map[string]fs.FileInfo),
+		ignored: make(map[string]struct{}),
+		names:   make(map[string]bool),
 	}
 }
 
 func (w *Watcher) Pause() {
-	b := debug.Stack()
-	log.Infoln(string(b))
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() {
+		log.Debugln("unlock")
+		w.mu.Unlock()
+	}()
+	defer func() {
+		recover()
+	}()
 	if w.paused == 0 {
-		w.pausednames = syncMap[bool]{}
-		w.names.Range(func(key, value any) bool {
-			name := key.(string)
-			bv := value.(bool)
-			w.pausednames.Store(name, bv)
-			return true
-		})
-		w.files = syncMap[fs.FileInfo]{} // make(map[string]os.FileInfo)
-		w.names = syncMap[bool]{}        // make(map[string]bool)
+		w.pausednames = make(map[string]bool)
+		for key, value := range w.names {
+			w.pausednames[key] = value
+		}
+		w.files = make(map[string]os.FileInfo)
+		w.names = make(map[string]bool)
 	}
 	w.paused++
 }
 
 func (w *Watcher) Resume() {
-	b := debug.Stack()
-	log.Infoln(string(b))
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() {
+		log.Debugln("unlock")
+		w.mu.Unlock()
+	}()
+	defer func() {
+		recover()
+	}()
+	if w.paused == 1 {
+		w.files = make(map[string]fs.FileInfo)
+		w.names = make(map[string]bool)
+		for name, recursive := range w.pausednames {
+			if recursive {
+				w.mu.Unlock()
+				w.AddRecursive(name)
+				w.mu.Lock()
+			} else {
+				w.mu.Unlock()
+				w.Add(name)
+				w.mu.Lock()
+			}
+		}
+		w.pausednames = nil
+	}
 	w.paused--
 	if w.paused < 0 {
 		w.paused = 0
-	}
-	if w.paused == 0 {
-		var err error
-		w.pausednames.Range(func(key, value any) bool {
-			name := key.(string)
-			bv := value.(bool)
-			if bv {
-				name, err = filepath.Abs(name)
-				if err != nil {
-					return true
-				}
-
-				fileList, err := w.listRecursive(name)
-				if err != nil {
-					return true
-				}
-				for k, v := range fileList {
-					w.files.Store(k, v)
-				}
-
-				// Add the name to the names list.
-				w.names.Store(name, true)
-			} else {
-				name, err = filepath.Abs(name)
-				if err != nil {
-					return true
-				}
-
-				// If name is on the ignored list or if hidden files are
-				// ignored and name is a hidden file or directory, simply return.
-				_, ignored := w.ignored.Get(name)
-
-				isHidden, err := isHiddenFile(name)
-				if err != nil {
-					return true
-				}
-
-				if ignored || (w.ignoreHidden && isHidden) {
-					return true
-				}
-
-				// Add the directory's contents to the files list.
-				fileList, err := w.list(name)
-				if err != nil {
-					return true
-				}
-				for k, v := range fileList {
-					w.files.Store(k, v)
-				}
-
-				// Add the name to the names list.
-				w.names.Store(name, false)
-			}
-			return true
-		})
-		w.pausednames = syncMap[bool]{}
 	}
 }
 
@@ -326,41 +291,50 @@ func (w *Watcher) Resume() {
 // the Event channel per watching cycle. If max events is less than 1, there is
 // no limit, which is the default.
 func (w *Watcher) SetMaxEvents(delta int) {
+	log.Debugln("lock")
 	w.mu.Lock()
 	w.maxEvents = delta
+	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // AddFilterHook
 func (w *Watcher) AddFilterHook(f FilterFileHookFunc) {
+	log.Debugln("lock")
 	w.mu.Lock()
 	w.ffh = append(w.ffh, f)
+	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // IgnoreHiddenFiles sets the watcher to ignore any file or directory
 // that starts with a dot.
 func (w *Watcher) IgnoreHiddenFiles(ignore bool) {
+	log.Debugln("lock")
 	w.mu.Lock()
 	w.ignoreHidden = ignore
+	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // FilterOps filters which event op types should be returned
 // when an event occurs.
 func (w *Watcher) FilterOps(ops ...Op) {
+	log.Debugln("lock")
 	w.mu.Lock()
-	w.ops = syncMap[struct{}]{}
+	w.ops = make(map[Op]struct{})
 	for _, op := range ops {
-		w.ops.Store(op, struct{}{})
+		w.ops[op] = struct{}{}
 	}
+	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // Add adds either a single file or directory to the file list.
 func (w *Watcher) Add(name string) (err error) {
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -369,7 +343,7 @@ func (w *Watcher) Add(name string) (err error) {
 
 	// If name is on the ignored list or if hidden files are
 	// ignored and name is a hidden file or directory, simply return.
-	_, ignored := w.ignored.Get(name)
+	_, ignored := w.ignored[name]
 
 	isHidden, err := isHiddenFile(name)
 	if err != nil {
@@ -386,11 +360,11 @@ func (w *Watcher) Add(name string) (err error) {
 		return err
 	}
 	for k, v := range fileList {
-		w.files.Store(k, v)
+		w.files[k] = v
 	}
 
 	// Add the name to the names list.
-	w.names.Store(name, false)
+	w.names[name] = false
 
 	return nil
 }
@@ -422,7 +396,7 @@ func (w *Watcher) list(name string) (map[string]os.FileInfo, error) {
 outer:
 	for _, fInfo := range fInfoList {
 		path := filepath.Join(name, fInfo.Name())
-		_, ignored := w.ignored.Get(path)
+		_, ignored := w.ignored[path]
 
 		isHidden, err := isHiddenFile(path)
 		if err != nil {
@@ -451,8 +425,9 @@ outer:
 
 // AddRecursive adds either a single file or directory recursively to the file list.
 func (w *Watcher) AddRecursive(name string) (err error) {
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -464,11 +439,11 @@ func (w *Watcher) AddRecursive(name string) (err error) {
 		return err
 	}
 	for k, v := range fileList {
-		w.files.Store(k, v)
+		w.files[k] = v
 	}
 
 	// Add the name to the names list.
-	w.names.Store(name, true)
+	w.names[name] = true
 
 	return nil
 }
@@ -493,7 +468,7 @@ func (w *Watcher) listRecursive(name string) (map[string]os.FileInfo, error) {
 
 		// If path is ignored and it's a directory, skip the directory. If it's
 		// ignored and it's a single file, skip the file.
-		_, ignored := w.ignored.Get(path)
+		_, ignored := w.ignored[path]
 
 		isHidden, err := isHiddenFile(path)
 		if err != nil {
@@ -514,8 +489,9 @@ func (w *Watcher) listRecursive(name string) (map[string]os.FileInfo, error) {
 
 // Remove removes either a single file or directory from the file's list.
 func (w *Watcher) Remove(name string) (err error) {
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -523,37 +499,36 @@ func (w *Watcher) Remove(name string) (err error) {
 	}
 
 	// Remove the name from w's names list.
-	w.names.Delete(name)
+	delete(w.names, name)
 
 	// If name is a single file, remove it and return.
-	info, found := w.files.Get(name)
+	info, found := w.files[name]
 	if !found {
 		return nil // Doesn't exist, just return.
 	}
 	if !info.IsDir() {
-		w.files.Delete(name)
+		delete(w.files, name)
 		return nil
 	}
 
 	// Delete the actual directory from w.files
-	w.files.Delete(name)
+	delete(w.files, name)
 
 	// If it's a directory, delete all of it's contents from w.files.
-	w.files.Range(func(key, value any) bool {
-		path := key.(string)
+	for path := range w.files {
 		if filepath.Dir(path) == name {
-			w.files.Delete(path)
+			delete(w.files, path)
 		}
-		return true
-	})
+	}
 	return nil
 }
 
 // RemoveRecursive removes either a single file or a directory recursively from
 // the file's list.
 func (w *Watcher) RemoveRecursive(name string) (err error) {
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -561,27 +536,25 @@ func (w *Watcher) RemoveRecursive(name string) (err error) {
 	}
 
 	// Remove the name from w's names list.
-	w.names.Delete(name)
+	delete(w.names, name)
 
 	// If name is a single file, remove it and return.
-	info, found := w.files.Get(name)
+	info, found := w.files[name]
 	if !found {
 		return nil // Doesn't exist, just return.
 	}
 	if !info.IsDir() {
-		w.files.Delete(name)
+		delete(w.files, name)
 		return nil
 	}
 
 	// If it's a directory, delete all of it's contents recursively
 	// from w.files.
-	w.files.Range(func(key, value any) bool {
-		path := key.(string)
+	for path := range w.files {
 		if strings.HasPrefix(path, name) {
-			w.files.Delete(path)
+			delete(w.files, path)
 		}
-		return true
-	})
+	}
 	return nil
 }
 
@@ -598,8 +571,10 @@ func (w *Watcher) Ignore(paths ...string) (err error) {
 		if err := w.RemoveRecursive(path); err != nil {
 			return err
 		}
+		log.Debugln("lock")
 		w.mu.Lock()
-		w.ignored.Store(path, struct{}{})
+		w.ignored[path] = struct{}{}
+		log.Debugln("unlock")
 		w.mu.Unlock()
 	}
 	return nil
@@ -607,21 +582,11 @@ func (w *Watcher) Ignore(paths ...string) (err error) {
 
 // WatchedFiles returns a map of files added to a Watcher.
 func (w *Watcher) WatchedFiles() map[string]os.FileInfo {
+	log.Debugln("lock")
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
 
-	files := make(map[string]os.FileInfo)
-	// for k, v := range w.files {
-	// 	files[k] = v
-	// }
-	w.files.Range(func(key, value any) bool {
-		k := key.(string)
-		v := value.(*os.FileInfo)
-		files[k] = *v
-		return true
-	})
-
-	return files
+	return w.files
 }
 
 // fileInfo is an implementation of os.FileInfo that can be used
@@ -667,16 +632,17 @@ func (w *Watcher) TriggerEvent(eventType Op, file os.FileInfo) {
 
 func (w *Watcher) retrieveFileList() map[string]os.FileInfo {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { w.mu.Unlock() }()
+	if w.paused > 0 {
+		return nil
+	}
 
 	fileList := make(map[string]os.FileInfo)
 
 	var list map[string]os.FileInfo
 	var err error
 
-	w.names.Range(func(key, value any) bool {
-		name := key.(string)
-		recursive := value.(bool)
+	for name, recursive := range w.names {
 		if recursive {
 			list, err = w.listRecursive(name)
 			if err != nil {
@@ -710,8 +676,7 @@ func (w *Watcher) retrieveFileList() map[string]os.FileInfo {
 		for k, v := range list {
 			fileList[k] = v
 		}
-		return true
-	})
+	}
 
 	return fileList
 }
@@ -725,74 +690,72 @@ func (w *Watcher) Start(d time.Duration) error {
 	}
 
 	// Make sure the Watcher is not already running.
+	log.Debugln("lock")
 	w.mu.Lock()
 	if w.running {
 		w.mu.Unlock()
 		return ErrWatcherRunning
 	}
 	w.running = true
+	log.Debugln("unlock")
 	w.mu.Unlock()
 
 	// Unblock w.Wait().
 	w.wg.Done()
 
 	for {
-		if w.paused == 0 {
-			// done lets the inner polling cycle loop know when the
-			// current cycle's method has finished executing.
-			done := make(chan struct{})
+		// done lets the inner polling cycle loop know when the
+		// current cycle's method has finished executing.
+		done := make(chan struct{})
 
-			// Any events that are found are first piped to evt before
-			// being sent to the main Event channel.
-			evt := make(chan Event)
+		// Any events that are found are first piped to evt before
+		// being sent to the main Event channel.
+		evt := make(chan Event)
 
-			// Retrieve the file list for all watched file's and dirs.
-			fileList := w.retrieveFileList()
+		// Retrieve the file list for all watched file's and dirs.
+		fileList := w.retrieveFileList()
 
-			// cancel can be used to cancel the current event polling function.
-			cancel := make(chan struct{})
+		// cancel can be used to cancel the current event polling function.
+		cancel := make(chan struct{})
 
-			// Look for events.
-			go func() {
-				w.pollEvents(fileList, evt, cancel)
-				done <- struct{}{}
-			}()
+		// Look for events.
+		go func() {
+			w.pollEvents(fileList, evt, cancel)
+			done <- struct{}{}
+		}()
 
-			// numEvents holds the number of events for the current cycle.
-			numEvents := 0
+		// numEvents holds the number of events for the current cycle.
+		numEvents := 0
 
-		inner:
-			for {
-				select {
-				case <-w.close:
+	inner:
+		for {
+			select {
+			case <-w.close:
+				close(cancel)
+				close(w.Closed)
+				return nil
+			case event := <-evt:
+				if len(w.ops) > 0 { // Filter Ops.
+					_, found := w.ops[event.Op]
+					if !found {
+						continue
+					}
+				}
+				numEvents++
+				if w.maxEvents > 0 && numEvents > w.maxEvents {
 					close(cancel)
-					close(w.Closed)
-					return nil
-				case event := <-evt:
-					if w.ops.Length() > 0 { // Filter Ops.
-						_, found := w.ops.Get(event.Op)
-						if !found {
-							continue
-						}
-					}
-					numEvents++
-					if w.maxEvents > 0 && numEvents > w.maxEvents {
-						close(cancel)
-						break inner
-					}
-					w.Event <- event
-				case <-done: // Current cycle is finished.
 					break inner
 				}
+				w.Event <- event
+			case <-done: // Current cycle is finished.
+				break inner
 			}
-
-			// Update the file's list.
-			w.mu.Lock()
-			for k, v := range fileList {
-				w.files.Store(k, v)
-			}
-			w.mu.Unlock()
 		}
+
+		// Update the file's list.
+		w.mu.Lock()
+		w.files = fileList
+		w.mu.Unlock()
 		// Sleep and then continue to the next loop iteration.
 		time.Sleep(d)
 	}
@@ -801,25 +764,25 @@ func (w *Watcher) Start(d time.Duration) error {
 func (w *Watcher) pollEvents(files map[string]os.FileInfo, evt chan Event,
 	cancel chan struct{}) {
 	w.mu.Lock()
-	defer w.mu.Unlock()
+	defer func() { w.mu.Unlock() }()
+	if w.paused > 0 {
+		return
+	}
 
 	// Store create and remove events for use to check for rename events.
 	creates := make(map[string]os.FileInfo)
 	removes := make(map[string]os.FileInfo)
 
 	// Check for removed files.
-	w.files.Range(func(key, value any) bool {
-		path := key.(string)
-		info := value.(fs.FileInfo)
+	for path, info := range w.files {
 		if _, found := files[path]; !found {
 			removes[path] = info
 		}
-		return true
-	})
+	}
 
 	// Check for created files, writes and chmods.
 	for path, info := range files {
-		oldInfo, found := w.files.Get(path)
+		oldInfo, found := w.files[path]
 		if !found {
 			// A file was created.
 			creates[path] = info
@@ -893,14 +856,17 @@ func (w *Watcher) Wait() {
 
 // Close stops a Watcher and unlocks its mutex, then sends a close signal.
 func (w *Watcher) Close() {
+	log.Debugln("lock")
 	w.mu.Lock()
 	if !w.running {
+		log.Debugln("unlock")
 		w.mu.Unlock()
 		return
 	}
 	w.running = false
-	w.files = syncMap[fs.FileInfo]{} // make(map[string]os.FileInfo)
-	w.names = syncMap[bool]{}        // make(map[string]bool)
+	w.files = make(map[string]os.FileInfo)
+	w.names = make(map[string]bool)
+	log.Debugln("unlock")
 	w.mu.Unlock()
 	// Send a close signal to the Start method.
 	w.close <- struct{}{}
