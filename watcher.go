@@ -10,88 +10,7 @@ import (
 	"strings"
 	"sync"
 	"time"
-
-	log "github.com/sirupsen/logrus"
 )
-
-// type syncMap[T interface{}] struct {
-// 	sync.Map
-// }
-
-// func (sm *syncMap[T]) ToArray() []T {
-// 	var l []T
-// 	sm.Range(func(key, value any) bool {
-// 		td, ok := value.(T)
-// 		if ok {
-// 			l = append(l, td)
-// 		}
-// 		return true
-// 	})
-// 	return l
-// }
-
-// func (sm *syncMap[T]) GetPtr(key any) (*T, bool) {
-// 	v, ok := sm.Load(key)
-// 	if ok {
-// 		value, ok := v.(T)
-// 		if ok {
-// 			return &value, true
-// 		} else {
-// 			value, ok := v.(*T)
-// 			if ok {
-// 				return value, true
-// 			}
-// 		}
-// 	}
-// 	return nil, false
-// }
-
-// func (sm *syncMap[T]) Get(key any) (T, bool) {
-// 	v, ok := sm.Load(key)
-// 	if ok {
-// 		value, ok := v.(T)
-// 		if ok {
-// 			return value, true
-// 		} else {
-// 			value, ok := v.(*T)
-// 			if ok {
-// 				return *value, true
-// 			}
-// 		}
-// 	}
-// 	var t T
-// 	return t, false
-// }
-
-// func (sm *syncMap[T]) Length() int {
-// 	length := 0
-// 	sm.Range(func(_, _ interface{}) bool {
-// 		length++
-// 		return true
-// 	})
-// 	return length
-// }
-
-// func (sm *syncMap[T]) UnmarshalJSON(data []byte) error {
-// 	var tmpMap map[string]T
-// 	if err := json.Unmarshal(data, &tmpMap); err != nil {
-// 		return err
-// 	}
-// 	for key, value := range tmpMap {
-// 		sm.Store(key, &value)
-// 	}
-// 	return nil
-// }
-
-// func (sm *syncMap[T]) MarshalJSON() ([]byte, error) {
-// 	tmpMap := make(map[string]interface{})
-// 	sm.Range(func(k, v interface{}) bool {
-// 		key, _ := k.(string)
-// 		tmpMap[key] = v
-// 		return true
-// 	})
-// 	return json.MarshalIndent(tmpMap, "", "  ")
-// }
 
 var (
 	// ErrDurationTooShort occurs when calling the watcher's Start
@@ -235,15 +154,8 @@ func New() *Watcher {
 }
 
 func (w *Watcher) Pause() {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() {
-		log.Debugln("unlock")
-		w.mu.Unlock()
-	}()
-	defer func() {
-		recover()
-	}()
+	defer w.mu.Unlock()
 	if w.paused == 0 {
 		w.pausednames = make(map[string]bool)
 		for key, value := range w.names {
@@ -256,15 +168,8 @@ func (w *Watcher) Pause() {
 }
 
 func (w *Watcher) Resume() {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() {
-		log.Debugln("unlock")
-		w.mu.Unlock()
-	}()
-	defer func() {
-		recover()
-	}()
+	defer w.mu.Unlock()
 	if w.paused == 1 {
 		w.files = make(map[string]fs.FileInfo)
 		w.names = make(map[string]bool)
@@ -291,50 +196,41 @@ func (w *Watcher) Resume() {
 // the Event channel per watching cycle. If max events is less than 1, there is
 // no limit, which is the default.
 func (w *Watcher) SetMaxEvents(delta int) {
-	log.Debugln("lock")
 	w.mu.Lock()
 	w.maxEvents = delta
-	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // AddFilterHook
 func (w *Watcher) AddFilterHook(f FilterFileHookFunc) {
-	log.Debugln("lock")
 	w.mu.Lock()
 	w.ffh = append(w.ffh, f)
-	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // IgnoreHiddenFiles sets the watcher to ignore any file or directory
 // that starts with a dot.
 func (w *Watcher) IgnoreHiddenFiles(ignore bool) {
-	log.Debugln("lock")
 	w.mu.Lock()
 	w.ignoreHidden = ignore
-	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // FilterOps filters which event op types should be returned
 // when an event occurs.
 func (w *Watcher) FilterOps(ops ...Op) {
-	log.Debugln("lock")
 	w.mu.Lock()
 	w.ops = make(map[Op]struct{})
 	for _, op := range ops {
 		w.ops[op] = struct{}{}
 	}
-	log.Debugln("unlock")
 	w.mu.Unlock()
 }
 
 // Add adds either a single file or directory to the file list.
 func (w *Watcher) Add(name string) (err error) {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
+	defer w.mu.Unlock()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -425,9 +321,8 @@ outer:
 
 // AddRecursive adds either a single file or directory recursively to the file list.
 func (w *Watcher) AddRecursive(name string) (err error) {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
+	defer w.mu.Unlock()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -489,9 +384,8 @@ func (w *Watcher) listRecursive(name string) (map[string]os.FileInfo, error) {
 
 // Remove removes either a single file or directory from the file's list.
 func (w *Watcher) Remove(name string) (err error) {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
+	defer w.mu.Unlock()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -526,9 +420,8 @@ func (w *Watcher) Remove(name string) (err error) {
 // RemoveRecursive removes either a single file or a directory recursively from
 // the file's list.
 func (w *Watcher) RemoveRecursive(name string) (err error) {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
+	defer w.mu.Unlock()
 
 	name, err = filepath.Abs(name)
 	if err != nil {
@@ -571,10 +464,8 @@ func (w *Watcher) Ignore(paths ...string) (err error) {
 		if err := w.RemoveRecursive(path); err != nil {
 			return err
 		}
-		log.Debugln("lock")
 		w.mu.Lock()
 		w.ignored[path] = struct{}{}
-		log.Debugln("unlock")
 		w.mu.Unlock()
 	}
 	return nil
@@ -582,9 +473,8 @@ func (w *Watcher) Ignore(paths ...string) (err error) {
 
 // WatchedFiles returns a map of files added to a Watcher.
 func (w *Watcher) WatchedFiles() map[string]os.FileInfo {
-	log.Debugln("lock")
 	w.mu.Lock()
-	defer func() { log.Debugln("unlock"); w.mu.Unlock() }()
+	defer w.mu.Unlock()
 
 	return w.files
 }
@@ -690,14 +580,12 @@ func (w *Watcher) Start(d time.Duration) error {
 	}
 
 	// Make sure the Watcher is not already running.
-	log.Debugln("lock")
 	w.mu.Lock()
 	if w.running {
 		w.mu.Unlock()
 		return ErrWatcherRunning
 	}
 	w.running = true
-	log.Debugln("unlock")
 	w.mu.Unlock()
 
 	// Unblock w.Wait().
@@ -764,7 +652,7 @@ func (w *Watcher) Start(d time.Duration) error {
 func (w *Watcher) pollEvents(files map[string]os.FileInfo, evt chan Event,
 	cancel chan struct{}) {
 	w.mu.Lock()
-	defer func() { w.mu.Unlock() }()
+	defer w.mu.Unlock()
 	if w.paused > 0 {
 		return
 	}
@@ -856,17 +744,14 @@ func (w *Watcher) Wait() {
 
 // Close stops a Watcher and unlocks its mutex, then sends a close signal.
 func (w *Watcher) Close() {
-	log.Debugln("lock")
 	w.mu.Lock()
 	if !w.running {
-		log.Debugln("unlock")
 		w.mu.Unlock()
 		return
 	}
 	w.running = false
 	w.files = make(map[string]os.FileInfo)
 	w.names = make(map[string]bool)
-	log.Debugln("unlock")
 	w.mu.Unlock()
 	// Send a close signal to the Start method.
 	w.close <- struct{}{}
